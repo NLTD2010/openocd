@@ -203,11 +203,43 @@ static void bitq_scan(struct scan_command *cmd)
 	bitq_scan_field(&cmd->fields[i], 1);
 }
 
-int bitq_execute_queue(struct jtag_command *cmd_queue)
+static void bitq_stableclocks(struct stableclocks_command *cmd)
+{
+	LOG_DEBUG_IO("add %d clocks", cmd->num_cycles);
+	int tms = 0;
+	switch (tap_get_state()) {
+		case TAP_RESET:
+			/* tms must be '1' to stay
+			 * in TAP_RESET mode
+			 */
+			tms = 1;
+			break;
+		case TAP_DRSHIFT:
+		case TAP_IDLE:
+		case TAP_DRPAUSE:
+		case TAP_IRSHIFT:
+		case TAP_IRPAUSE:
+			/* else, tms should be '0' */
+			tms = 0;
+			break;
+		/* above stable states are OK */
+		default:
+			LOG_ERROR("stableclocks "
+				"in non-stable state \"%s\"",
+				tap_state_name(tap_get_state()));
+			return;
+	}
+	for (int i = 0; i < cmd->num_cycles; i++)
+		bitq_io(tms, 0, 0);
+}
+
+int bitq_execute_queue(void)
 {
 	struct jtag_command *cmd = cmd_queue; /* currently processed command */
+	struct jtag_command *cmd = jtag_command_queue; /* currently processed command */
 
 	bitq_in_state.cmd = cmd_queue;
+	bitq_in_state.cmd = jtag_command_queue;
 	bitq_in_state.field_idx = 0;
 	bitq_in_state.bit_pos   = 0;
 	bitq_in_state.status    = ERROR_OK;
@@ -229,6 +261,10 @@ int bitq_execute_queue(struct jtag_command *cmd_queue)
 			LOG_DEBUG_IO("runtest %i cycles, end in %i", cmd->cmd.runtest->num_cycles, cmd->cmd.runtest->end_state);
 			bitq_end_state(cmd->cmd.runtest->end_state);
 			bitq_runtest(cmd->cmd.runtest->num_cycles);
+			break;
+
+		case JTAG_STABLECLOCKS:
+			bitq_stableclocks(cmd->cmd.stableclocks);
 			break;
 
 		case JTAG_TLR_RESET:

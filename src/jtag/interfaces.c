@@ -31,6 +31,9 @@
  * that contain an adapter_driver structure that can added to this list.
  */
 
+#if BUILD_DIRTYJTAG == 1
+extern struct adapter_driver dirtyjtag_adapter_driver;
+#endif
 /**
  * The list of built-in JTAG interfaces, containing entries for those
  * drivers that were enabled by the @c configure script.
@@ -152,6 +155,9 @@ struct adapter_driver *adapter_drivers[] = {
 #endif
 #if BUILD_AM335XGPIO == 1
 		&am335xgpio_adapter_driver,
+#endif
+#if BUILD_DIRTYJTAG == 1
+		&dirtyjtag_adapter_driver,
 #endif
 		NULL,
 	};
