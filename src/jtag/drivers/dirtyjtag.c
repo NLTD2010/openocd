@@ -107,12 +107,13 @@ static struct libusb_device_handle *usb_handle;
 #define DIRTYJTAG_BUFFER_SIZE 64
 static const size_t dirtyjtag_buffer_size = DIRTYJTAG_BUFFER_SIZE;
 static uint8_t dirtyjtag_buffer[DIRTYJTAG_BUFFER_SIZE];
-static size_t dirtyjtag_buffer_use;
+static size_t dirtyjtag_buffer_fill;
 
 struct dirtyjtag_bitq_state {
 	uint32_t tdi_out_count;
 	uint32_t max_tdi_count;
 	uint32_t tdo_in_expected;
+	int tdo_bits_expected;
 	int tdo_bytes_expected;
 	bool prev_tms;
 	int out_state;
@@ -128,6 +129,8 @@ struct dirtyjtag_bitq_state {
 	uint8_t out_command_count; /* command count for the current command array */
 };
 
+#define bits_to_bytes(n) (((n)+7)/8)
+
 static struct dirtyjtag_bitq_state s_dirtyjtag_bitq;
 static struct dirtyjtag_bitq_state *djtg_bitq = &s_dirtyjtag_bitq;
 static struct bitq_interface dirtyjtag_bitq_interface;
@@ -136,39 +139,39 @@ static int dirtyjtag_buffer_flush(void)
 {
 	size_t sent = 0;
 
-	if (dirtyjtag_buffer_use == 0)
+	if (dirtyjtag_buffer_fill == 0)
 		return ERROR_OK;
 
-	dirtyjtag_buffer[dirtyjtag_buffer_use] = CMD_STOP;
+	dirtyjtag_buffer[dirtyjtag_buffer_fill] = CMD_STOP;
 
 	int res =
 		jtag_libusb_bulk_write(usb_handle, dirtyjtag_ep_write, (char *)dirtyjtag_buffer,
-							   dirtyjtag_buffer_use + 1, DIRTYJTAG_USB_TIMEOUT, (int *)&sent);
+							   dirtyjtag_buffer_fill + 1, DIRTYJTAG_USB_TIMEOUT, (int *)&sent);
 	if (res != ERROR_OK)
 		return res;
-	if (sent != dirtyjtag_buffer_use + 1) {
+	if (sent != dirtyjtag_buffer_fill + 1) {
 		LOG_ERROR("error writing to device");
 		return ERROR_JTAG_DEVICE_ERROR;
 	}
-	dirtyjtag_buffer_use = 0;
+	dirtyjtag_buffer_fill = 0;
 	return ERROR_OK;
 }
 
 static int dirtyjtag_buffer_append(const uint8_t *command, size_t length)
 {
-	if ((dirtyjtag_buffer_use + length + 1) > dirtyjtag_buffer_size) {
+	if ((dirtyjtag_buffer_fill + length + 1) > dirtyjtag_buffer_size) {
 		int res = dirtyjtag_buffer_flush();
 		if (res != ERROR_OK)
 			return res;
 	}
-	memcpy(&dirtyjtag_buffer[dirtyjtag_buffer_use], command, length);
-	dirtyjtag_buffer_use += length;
+	memcpy(&dirtyjtag_buffer[dirtyjtag_buffer_fill], command, length);
+	dirtyjtag_buffer_fill += length;
 	return ERROR_OK;
 }
 
 #define buffer_pos_of_bit(n) (2 + ((n) / 8))
 
-/* send to the probe and get an answer back if tdo_bytes_expected is > 0 */
+/* send to the probe and get an answer back if tdo_bits_expected is > 0 */
 static int dirtyjtag_flush_bitq(void)
 {
 	int out_len = djtg_bitq->current_command_array - djtg_bitq->out_buffer;
@@ -189,7 +192,7 @@ static int dirtyjtag_flush_bitq(void)
 		LOG_ERROR("error writing to device");
 		return ERROR_JTAG_DEVICE_ERROR;
 	}
-	if (djtg_bitq->tdo_bytes_expected > 0) {
+	if (djtg_bitq->tdo_bits_expected > 0) {
 		int read;
 		res = jtag_libusb_bulk_read(usb_handle, dirtyjtag_ep_read,
 									(char *)djtg_bitq->in_buffer + djtg_bitq->in_buffer_fill,
@@ -200,8 +203,9 @@ static int dirtyjtag_flush_bitq(void)
 			LOG_ERROR("error reading device: amount read incorrect");
 			return ERROR_JTAG_DEVICE_ERROR;
 		}
-		djtg_bitq->in_buffer_fill += djtg_bitq->tdo_bytes_expected;
+		djtg_bitq->in_buffer_fill += read;
 		djtg_bitq->in_command_count = djtg_bitq->expected_in_command_count;
+		djtg_bitq->tdo_bits_expected = 0;
 		djtg_bitq->tdo_bytes_expected = 0;
 	}
 	/* re-init all relevant state variables */
@@ -253,10 +257,12 @@ static int dirtyjtag_close_command(bool force_send_to_probe)
 	}
 	djtg_bitq->tdi_out_count = 0;
 	if (djtg_bitq->tdo_in_expected != 0) {
-		uint32_t prev_bytes = djtg_bitq->tdo_bytes_expected;
-		djtg_bitq->tdo_bytes_expected += (djtg_bitq->tdo_in_expected + 7) / 8;
+		djtg_bitq->tdo_bits_expected += djtg_bitq->tdo_in_expected;
 		djtg_bitq->in_bit_counts[djtg_bitq->expected_in_command_count] =
-			prev_bytes * 8 + djtg_bitq->tdo_in_expected;
+			djtg_bitq->tdo_bits_expected;
+		/* round up the bit count on command boundaries*/
+		djtg_bitq->tdo_bits_expected = 8 * bits_to_bytes(djtg_bitq->tdo_bits_expected);
+		djtg_bitq->tdo_bytes_expected += bits_to_bytes(djtg_bitq->tdo_in_expected);
 		djtg_bitq->expected_in_command_count++;
 		djtg_bitq->tdo_in_expected = 0;
 	}
@@ -313,7 +319,7 @@ static int dirtyjtag_init(void)
 {
 	uint16_t avids[] = {dirtyjtag_vid, 0};
 	uint16_t apids[] = {dirtyjtag_pid, 0};
-	if (jtag_libusb_open(avids, apids, &usb_handle, NULL)) {
+	if (jtag_libusb_open(avids, apids, "DirtyJTAG", &usb_handle, NULL)) {
 		LOG_ERROR("dirtyjtag not found: vid=%04x, pid=%04x\n", dirtyjtag_vid, dirtyjtag_pid);
 		return ERROR_JTAG_INIT_FAILED;
 	}
@@ -329,7 +335,7 @@ static int dirtyjtag_init(void)
 		LOG_ERROR("The probe appears to be running version 1 of DirtyJTAG. Please upgrade to DirtyJTAG 2.0 or newer.");
 		return ERROR_JTAG_INIT_FAILED;
 	}
-	dirtyjtag_buffer_use = 0;
+	dirtyjtag_buffer_fill = 0;
 	if (dirtyjtag_init_bitq())
 		return ERROR_JTAG_INIT_FAILED;
 	return ERROR_OK;
