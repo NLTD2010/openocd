@@ -91,6 +91,8 @@ enum out_state {
 	OUTSTATE_XFER,
 };
 
+static int dirtyjtag_cjtag_protocol;
+
 /**
  * USB settings
  */
@@ -397,7 +399,10 @@ static int intf_bitq_out(int tms, int tdi, int tdo_req)
 	switch (djtg_bitq->out_state) {
 		case OUTSTATE_XFER:
 			if (!tms) {
-				write_tdi(tdi, tdo_req);
+				if(dirtyjtag_cjtag_protocol)
+					write_tdi(tdi^1, tdo_req);
+				else
+					write_tdi(tdi, tdo_req);
 			} else {
 				// This is the last of the scan bit (pause)
 				dirtyjtag_close_command(false);
@@ -434,9 +439,22 @@ static int intf_bitq_out(int tms, int tdi, int tdo_req)
 				djtg_bitq->out_state = OUTSTATE_XFER;
 				dirtyjtag_close_command(false);
 				dirtyjtag_open_command(OUTSTATE_XFER);
-				write_tdi(tdi, tdo_req);
+				if(dirtyjtag_cjtag_protocol)
+					write_tdi(tdi^1, tdo_req);
+				else
+					write_tdi(tdi, tdo_req);
 			} else {
-				LOG_ERROR("tms at 1 unexpected");
+				dirtyjtag_close_command(false);
+				dirtyjtag_open_command(OUTSTATE_CLK);
+				if (tdo_req) {
+					djtg_bitq->tdo_in_expected = 1;
+					djtg_bitq->tdi_out_count = 1;
+				}
+				djtg_bitq->current_command_array[1] = (tdi ? SIG_TDI : 0) | (tms ? SIG_TMS : 0);
+				djtg_bitq->current_command_array[2] = 1;
+				djtg_bitq->out_state = OUTSTATE_CLK;
+				dirtyjtag_close_command(false);
+				dirtyjtag_open_command(OUTSTATE_CLK);
 			}
 			break;
 	}
@@ -511,6 +529,41 @@ static int dirtyjtag_reset(int trst, int srst)
 	return dirtyjtag_buffer_flush();
 }
 
+COMMAND_HANDLER(dirtyjtag_enable_cJTAG)
+{
+	if (CMD_ARGC != 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	COMMAND_PARSE_NUMBER(int, CMD_ARGV[0], dirtyjtag_cjtag_protocol);
+	LOG_INFO("DirtyJTAG: cJTAG protocol set to %d", dirtyjtag_cjtag_protocol);
+
+	return ERROR_OK;
+}
+
+
+static const struct command_registration dirtyjtag_subcommands[] = {
+	{
+		.name = "cjtag",
+		.handler = &dirtyjtag_enable_cJTAG,
+		.mode = COMMAND_CONFIG,
+		.help = "enable cJTAG. protocol: 0/disable 1/enable",
+		.usage = "protocol",
+	},
+	COMMAND_REGISTRATION_DONE
+};
+
+static const struct command_registration dirtyjtag_commands[] = {
+	{
+		.name = "dirtyjtag",
+		.mode = COMMAND_ANY,
+		.help = "DirtyJTAG commands",
+		.chain = dirtyjtag_subcommands,
+		.usage = "",
+	},
+	COMMAND_REGISTRATION_DONE
+};
+
+
 static struct bitq_interface dirtyjtag_bitq_interface = {
 	.out = intf_bitq_out,
 	.flush = intf_bitq_flush,
@@ -527,6 +580,7 @@ static struct jtag_interface dirtyjtag_interface = {
 struct adapter_driver dirtyjtag_adapter_driver = {
 	.name = "dirtyjtag",
 	.transports = jtag_only,
+	.commands = dirtyjtag_commands,
 	.init = dirtyjtag_init,
 	.quit = dirtyjtag_quit,
 	.speed = dirtyjtag_speed,
