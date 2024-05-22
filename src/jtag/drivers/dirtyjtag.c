@@ -305,12 +305,10 @@ static int dirtyjtag_getversion(void)
 			return ERROR_JTAG_INIT_FAILED;
 		}
 	} while (actual_length == 0);
-	if (!strncmp("DJTAG1\n", (char *)rx_buf, 7)) {
-		dirtyjtag_version = 1;
-	} else if (!strncmp("DJTAG2\n", (char *)rx_buf, 7)) {
+	if (!strncmp("DCJTAG\n", (char *)rx_buf, 7)) {
 		dirtyjtag_version = 2;
 	} else {
-		LOG_INFO("dirtyJtag version unknown");
+		LOG_INFO("dirtyJtag version unknown. please use cjtag branch.");
 		dirtyjtag_version = 0;
 	}
 	LOG_INFO("dirtyjtag version %d", dirtyjtag_version);
