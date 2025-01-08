@@ -1,4 +1,4 @@
-针对 rv1106 mcu 的 openocd 版本，配合：https://github.com/luyi1888/pico-dirtyJtag u2f 文件已上传到根目录
+针对 rv1106 mcu 的 openocd 版本，配合：https://github.com/luyi1888/pico-dirtyJtag（u2f 文件已上传到根目录）
 
 编译：
   ./bootstrap (when building from the git repository)
