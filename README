@@ -1,4 +1,5 @@
 针对 rv1106 mcu 的 openocd 版本，配合：https://github.com/luyi1888/pico-dirtyJtag 使用（u2f 文件已上传到根目录）
+在 kali 2024.3 下测试通过，ubuntu 18.04~22.04 均因为各种问题失败
 
 编译：
   ./bootstrap (when building from the git repository)
